@@ -1123,6 +1123,20 @@ async def cmd_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇺🇿 O'zbek ✅", callback_data="lang_uz"),
+            InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
+        ]
+    ])
+    await update.message.reply_text(
+        "🌐 <b>Til tanlang / Выберите язык</b>",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "<b>🎮 Mafia — buyruqlar</b>\n\n"
@@ -1167,6 +1181,17 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _launch_game(context: ContextTypes.DEFAULT_TYPE, game: Game):
     game.assign_roles()
+
+    # Remove lobby buttons so nobody can join/leave after game starts
+    if game.join_message_id:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=game.chat_id,
+                message_id=game.join_message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
 
     await context.bot.send_message(
         chat_id=game.chat_id,
@@ -1614,6 +1639,18 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cb_giyi(update, context)
     elif data.startswith("vote_"):
         await cb_vote(update, context)
+    elif data.startswith("lang_"):
+        lang = data[5:]
+        if lang == "uz":
+            await update.callback_query.answer("🇺🇿 O'zbek tili tanlandi!", show_alert=False)
+            try:
+                await update.callback_query.edit_message_text(
+                    "🌐 <b>Til:</b> 🇺🇿 O'zbek ✅", parse_mode="HTML"
+                )
+            except BadRequest:
+                pass
+        elif lang == "ru":
+            await update.callback_query.answer("🇷🇺 Скоро будет добавлен!", show_alert=True)
     else:
         await update.callback_query.answer()
 
@@ -1633,16 +1670,20 @@ async def _post_init(app: Application) -> None:
         BotCommand("stop",     "⏹ Ro'yxatdan o'tishni to'xtatish"),
         BotCommand("cancel",   "❌ O'yinni bekor qilish"),
         BotCommand("next",     "📣 Keyingi o'yin haqida"),
+        BotCommand("leave",    "🚪 O'yindan chiqish"),
         BotCommand("top",      "🏆 Reyting"),
         BotCommand("settings", "⚙️ O'yin sozlamalari"),
         BotCommand("share",    "🔗 Do'stlarni taklif qilish"),
         BotCommand("help",     "❓ Yordam"),
     ]
     private_cmds = [
-        BotCommand("top",     "🏆 Reyting"),
-        BotCommand("profile", "👤 Profilim"),
-        BotCommand("share",   "🔗 Do'stlarni taklif qilish"),
-        BotCommand("help",    "❓ Yordam"),
+        BotCommand("start",    "🤖 Botni boshlash"),
+        BotCommand("profile",  "👤 O'yin profili"),
+        BotCommand("top",      "🏆 Reyting"),
+        BotCommand("language", "🌐 Til almashtirish"),
+        BotCommand("leave",    "🚪 O'yindan chiqish"),
+        BotCommand("share",    "🔗 Do'stlarni taklif qilish"),
+        BotCommand("help",     "❓ Yordam"),
     ]
     await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
     await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
@@ -1664,6 +1705,7 @@ def main():
     app.add_handler(CommandHandler("next",     cmd_next))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("share",    cmd_share))
+    app.add_handler(CommandHandler("language", cmd_language))
     app.add_handler(CommandHandler("join",     cmd_join))
     app.add_handler(CommandHandler("leave",    cmd_leave))
     app.add_handler(CommandHandler("startgame", cmd_startgame))
