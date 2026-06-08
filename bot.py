@@ -105,16 +105,12 @@ def lobby_text(game: Game) -> str:
 
 
 def lobby_kb(chat_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "✅ O'yinga qo'shilish",
-                url=f"https://t.me/{BOT_USERNAME}?start=join_{chat_id}",
-            ),
-            InlineKeyboardButton("❌ Chiqish", callback_data=f"lleave_{chat_id}"),
-        ],
-        [InlineKeyboardButton("▶️ Boshlash", callback_data=f"gstart_{chat_id}")],
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🎮 O'yinga qo'shilish",
+            url=f"https://t.me/{BOT_USERNAME}?start=join_{chat_id}",
+        ),
+    ]])
 
 
 def mention(p: Player) -> str:
@@ -907,8 +903,18 @@ async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_game[user.id] = chat.id
     game.lobby_remaining = config.LOBBY_TIME
 
-    msg = await update.message.reply_text(
-        lobby_text(game), reply_markup=lobby_kb(chat.id), parse_mode="HTML"
+    # Send sticker if configured
+    if config.MAFIA_STICKER:
+        try:
+            await context.bot.send_sticker(chat_id=chat.id, sticker=config.MAFIA_STICKER)
+        except Exception:
+            pass
+
+    msg = await context.bot.send_message(
+        chat_id=chat.id,
+        text=lobby_text(game),
+        reply_markup=lobby_kb(chat.id),
+        parse_mode="HTML",
     )
     game.join_message_id = msg.message_id
     timers[chat.id] = asyncio.create_task(_lobby_timeout(context, chat.id))

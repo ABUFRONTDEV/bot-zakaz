@@ -8,6 +8,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Admin: faqat shu username o'yinni boshqara oladi
 ADMIN_USERNAME = "abufdx"
 
+# Mafia sticker file_id (bo'sh qolsa stikerssiz chiqadi)
+MAFIA_STICKER = os.getenv("MAFIA_STICKER", "")
+
 MIN_PLAYERS = 4
 MAX_PLAYERS = 15
 
