@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 games: dict[int, Game] = {}
 user_game: dict[int, int] = {}
 timers: dict[int, asyncio.Task] = {}
+BOT_USERNAME: str = ""
 
 # chat_id -> {user_id: (full_name, username)}  — tracks everyone who sends a message
 group_members: dict[int, dict[int, tuple]] = {}
@@ -102,8 +103,13 @@ def lobby_text(game: Game) -> str:
 
 def lobby_kb(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Qo'shilish", callback_data=f"join_{chat_id}"),
-         InlineKeyboardButton("❌ Chiqish", callback_data=f"lleave_{chat_id}")],
+        [
+            InlineKeyboardButton(
+                "✅ O'yinga qo'shilish",
+                url=f"https://t.me/{BOT_USERNAME}?start=join_{chat_id}",
+            ),
+            InlineKeyboardButton("❌ Chiqish", callback_data=f"lleave_{chat_id}"),
+        ],
         [InlineKeyboardButton("▶️ Boshlash", callback_data=f"gstart_{chat_id}")],
     ])
 
@@ -748,7 +754,51 @@ async def finish_game(context: ContextTypes.DEFAULT_TYPE, chat_id: int, winner: 
 # ─────────────────────── COMMANDS ───────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type == "private":
+    user = update.effective_user
+    chat = update.effective_chat
+
+    # Deep link: /start join_{chat_id}
+    if chat.type == "private" and context.args and context.args[0].startswith("join_"):
+        try:
+            chat_id = int(context.args[0][5:])
+        except ValueError:
+            await update.message.reply_text("❌ Noto'g'ri havola.")
+            return
+
+        game = games.get(chat_id)
+        if not game or game.phase != GamePhase.LOBBY:
+            await update.message.reply_text("❌ O'yin topilmadi yoki allaqachon boshlangan.")
+            return
+        if user.id in game.players:
+            await update.message.reply_text("✅ Siz allaqachon qo'shilgansiz!")
+            return
+        if not game.add_player(user.id, user.full_name, user.username):
+            await update.message.reply_text("❌ O'yin to'la (15/15)!")
+            return
+
+        user_game[user.id] = chat_id
+        await update.message.reply_text(
+            f"✅ <b>Siz o'yinga qo'shildingiz!</b>\n\n"
+            f"👥 Jami: {len(game.players)} o'yinchi\n\n"
+            f"Guruhga qayting — o'yin boshlanishini kuting.",
+            parse_mode="HTML",
+        )
+
+        # Update group lobby message
+        if game.join_message_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=game.join_message_id,
+                    text=lobby_text(game),
+                    reply_markup=lobby_kb(chat_id),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        return
+
+    if chat.type == "private":
         await update.message.reply_text(
             "👋 Salom! Men <b>Mafia</b> o'yin botiman.\n\n"
             "Guruhga qo'shing va /newgame buyrug'ini yuboring!",
@@ -773,33 +823,11 @@ async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     game = Game(chat_id=chat.id, creator_id=user.id)
     games[chat.id] = game
-
-    # Add creator
     game.add_player(user.id, user.full_name, user.username)
     user_game[user.id] = chat.id
 
-    # Auto-add all tracked group members
-    auto_added: list[Player] = []
-    for uid, (name, username) in group_members.get(chat.id, {}).items():
-        if uid == user.id:
-            continue
-        if uid in user_game:
-            continue  # already in another game
-        if game.add_player(uid, name, username):
-            user_game[uid] = chat.id
-            auto_added.append(game.players[uid])
-
-    # Build notification text
-    lines = [lobby_text(game)]
-    if auto_added:
-        tags = " ".join(mention(p) for p in auto_added)
-        lines.append(
-            f"\n📣 Guruh a'zolari chaqirildi: {tags}\n"
-            f"Ishtirok etmaslik uchun <b>❌ Chiqish</b> tugmasini bosing."
-        )
-
     msg = await update.message.reply_text(
-        "\n".join(lines), reply_markup=lobby_kb(chat.id), parse_mode="HTML"
+        lobby_text(game), reply_markup=lobby_kb(chat.id), parse_mode="HTML"
     )
     game.join_message_id = msg.message_id
 
@@ -1407,12 +1435,19 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─────────────────────── MAIN ───────────────────────────────────
 
+async def _post_init(app: Application) -> None:
+    global BOT_USERNAME
+    me = await app.bot.get_me()
+    BOT_USERNAME = me.username or ""
+    logger.info("Bot username: @%s", BOT_USERNAME)
+
+
 def main():
     token = config.BOT_TOKEN
     if not token:
         raise RuntimeError("BOT_TOKEN topilmadi! .env faylini tekshiring.")
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(_post_init).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("newgame", cmd_newgame))
