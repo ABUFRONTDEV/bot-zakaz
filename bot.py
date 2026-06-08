@@ -3,7 +3,10 @@ import logging
 import os
 from typing import Optional
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
+)
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Forbidden, BadRequest
 
@@ -133,6 +136,62 @@ async def cancel_timer(chat_id: int):
 def _fmt_countdown(emoji: str, label: str, remaining: int) -> str:
     mins, secs = divmod(max(0, remaining), 60)
     return f"{emoji} <b>{label}</b> — ⏱ {mins:02d}:{secs:02d}"
+
+
+async def _lobby_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    game = games.get(chat_id)
+    if not game:
+        return
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=_fmt_countdown("🎮", "Ro'yxatdan o'tish tugashiga", game.lobby_remaining),
+            parse_mode="HTML",
+        )
+        game.lobby_countdown_msg_id = msg.message_id
+    except Exception:
+        pass
+    try:
+        while game.lobby_remaining > 0:
+            step = min(10, game.lobby_remaining)
+            await asyncio.sleep(step)
+            game.lobby_remaining -= step
+            game = games.get(chat_id)
+            if not game or game.phase != GamePhase.LOBBY:
+                return
+            if game.lobby_remaining > 0 and game.lobby_countdown_msg_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=game.lobby_countdown_msg_id,
+                        text=_fmt_countdown("🎮", "Ro'yxatdan o'tish tugashiga", game.lobby_remaining),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+    except asyncio.CancelledError:
+        return
+    timers.pop(chat_id, None)
+    game = games.get(chat_id)
+    if not game or game.phase != GamePhase.LOBBY:
+        return
+    # Delete countdown message
+    if game.lobby_countdown_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=game.lobby_countdown_msg_id)
+        except Exception:
+            pass
+        game.lobby_countdown_msg_id = None
+    if len(game.players) >= config.MIN_PLAYERS:
+        await _launch_game(context, game)
+    else:
+        for uid in list(game.players.keys()):
+            user_game.pop(uid, None)
+        games.pop(chat_id, None)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏱ Vaqt tugadi. Yetarli o'yinchi yig'ilmadi ({len(game.players)}/{config.MIN_PLAYERS}).",
+        )
 
 
 async def _clear_countdown(context: ContextTypes.DEFAULT_TYPE, game: "Game"):
@@ -798,14 +857,35 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         return
 
-    if chat.type == "private":
-        await update.message.reply_text(
-            "👋 Salom! Men <b>Mafia</b> o'yin botiman.\n\n"
-            "Guruhga qo'shing va /newgame buyrug'ini yuboring!",
-            parse_mode="HTML",
-        )
-    else:
-        await update.message.reply_text("Mafia o'yini uchun /newgame yuboring!")
+    if chat.type in ("group", "supergroup"):
+        # /start in group = start game now (admin only)
+        if not is_admin(user):
+            return
+        game = games.get(chat.id)
+        if not game or game.phase != GamePhase.LOBBY:
+            await update.message.reply_text("❌ Aktiv lobby yo'q. /game bilan yangi o'yin oching.")
+            return
+        if len(game.players) < config.MIN_PLAYERS:
+            await update.message.reply_text(
+                f"❌ Kamida {config.MIN_PLAYERS} o'yinchi kerak! (hozir: {len(game.players)})"
+            )
+            return
+        await cancel_timer(chat.id)
+        if game.lobby_countdown_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=chat.id, message_id=game.lobby_countdown_msg_id)
+            except Exception:
+                pass
+            game.lobby_countdown_msg_id = None
+        await _launch_game(context, game)
+        return
+
+    # Private chat
+    await update.message.reply_text(
+        "👋 Salom! Men <b>Mafia</b> o'yin botiman.\n\n"
+        "Guruhga qo'shing va /game buyrug'ini yuboring!",
+        parse_mode="HTML",
+    )
 
 
 async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -825,11 +905,13 @@ async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     games[chat.id] = game
     game.add_player(user.id, user.full_name, user.username)
     user_game[user.id] = chat.id
+    game.lobby_remaining = config.LOBBY_TIME
 
     msg = await update.message.reply_text(
         lobby_text(game), reply_markup=lobby_kb(chat.id), parse_mode="HTML"
     )
     game.join_message_id = msg.message_id
+    timers[chat.id] = asyncio.create_task(_lobby_timeout(context, chat.id))
 
 
 async def cmd_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -941,20 +1023,123 @@ async def cmd_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
+async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Alias for /newgame."""
+    await cmd_newgame(update, context)
+
+
+async def cmd_extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        return
+    game = games.get(chat.id)
+    if not game or game.phase != GamePhase.LOBBY:
+        await update.message.reply_text("❌ Aktiv lobby yo'q.")
+        return
+    game.lobby_remaining += config.LOBBY_EXTEND
+    await update.message.reply_text(
+        f"⏱ Ro'yxatdan o'tish +{config.LOBBY_EXTEND}s uzaytirildi!\n"
+        f"Qolgan vaqt: ~{game.lobby_remaining}s"
+    )
+
+
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop lobby (cancel registration) without starting the game."""
+    chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        return
+    game = games.get(chat.id)
+    if not game or game.phase != GamePhase.LOBBY:
+        await update.message.reply_text("❌ Aktiv lobby yo'q.")
+        return
+    await cancel_timer(chat.id)
+    if game.lobby_countdown_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat.id, message_id=game.lobby_countdown_msg_id)
+        except Exception:
+            pass
+    for uid in list(game.players.keys()):
+        user_game.pop(uid, None)
+    games.pop(chat.id, None)
+    await update.message.reply_text("⏹ Ro'yxatdan o'tish to'xtatildi.")
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel game at any phase."""
+    chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        return
+    game = games.get(chat.id)
+    if not game:
+        await update.message.reply_text("❌ Aktiv o'yin yo'q.")
+        return
+    await cancel_timer(chat.id)
+    await _clear_countdown(context, game)
+    if game.lobby_countdown_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat.id, message_id=game.lobby_countdown_msg_id)
+        except Exception:
+            pass
+    for uid in list(game.players.keys()):
+        user_game.pop(uid, None)
+    games.pop(chat.id, None)
+    await update.message.reply_text("❌ O'yin bekor qilindi.")
+
+
+async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        return
+    await update.message.reply_text(
+        "📣 <b>Keyingi o'yin tez orada boshlanadi!</b>\n\n"
+        "Tayyor bo'ling — /game boshlanishini kuting 🎮",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        return
+    await update.message.reply_text(
+        f"⚙️ <b>O'yin sozlamalari</b>\n\n"
+        f"👥 Min o'yinchilar: <b>{config.MIN_PLAYERS}</b>\n"
+        f"👥 Max o'yinchilar: <b>{config.MAX_PLAYERS}</b>\n\n"
+        f"⏱ Lobby vaqti: <b>{config.LOBBY_TIME}s</b>\n"
+        f"⏱ Uzaytirish: <b>+{config.LOBBY_EXTEND}s</b>\n\n"
+        f"🌙 Kecha: <b>{config.NIGHT_TIME}s</b>\n"
+        f"🗣 Muhokama: <b>{config.DISCUSSION_TIME}s</b>\n"
+        f"🗳 Ovoz berish: <b>{config.VOTE_TIME}s</b>",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"🔗 <b>Do'stlarni taklif qiling!</b>\n\n"
+        f"Bot: @{BOT_USERNAME}\n\n"
+        f"Guruhga qo'shing va birga o'ynang 🎮",
+        parse_mode="HTML",
+    )
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "<b>🎮 MAFIA — BUYRUQLAR</b>\n\n"
-        "/newgame — Yangi o'yin (guruhda)\n"
-        "/join — O'yinga qo'shilish\n"
-        "/leave — Lobbydan chiqish\n"
-        "/startgame — O'yinni boshlash\n"
-        "/endgame — O'yinni tugatish\n"
-        "/vote — Ovoz berishni boshlash\n"
-        "/players — O'yinchilar ro'yxati\n"
-        "/roles — Barcha rollar haqida\n"
-        "/profile — Mening statistikam\n"
-        "/top — Eng yaxshi o'yinchilar\n"
-        "/help — Ushbu yordam",
+        "<b>🎮 Mafia — buyruqlar</b>\n\n"
+        "<b>Admin:</b>\n"
+        "/game — Yangi o'yin\n"
+        "/start — O'yinni boshlash\n"
+        "/extend — Vaqtni uzaytirish\n"
+        "/stop — Ro'yxatni to'xtatish\n"
+        "/cancel — O'yinni bekor qilish\n"
+        "/next — Keyingi o'yin haqida\n"
+        "/settings — Sozlamalar\n\n"
+        "<b>Hammaga:</b>\n"
+        "/top — Reyting\n"
+        "/profile — Statistikam\n"
+        "/share — Taklif qilish\n"
+        "/roles — Barcha rollar\n"
+        "/help — Yordam",
         parse_mode="HTML",
     )
 
@@ -1441,6 +1626,27 @@ async def _post_init(app: Application) -> None:
     BOT_USERNAME = me.username or ""
     logger.info("Bot username: @%s", BOT_USERNAME)
 
+    group_cmds = [
+        BotCommand("game",     "🎮 Yangi o'yin"),
+        BotCommand("start",    "▶️ O'yinni boshlash"),
+        BotCommand("extend",   "⏱ Ro'yxatdan o'tishni uzaytirish"),
+        BotCommand("stop",     "⏹ Ro'yxatdan o'tishni to'xtatish"),
+        BotCommand("cancel",   "❌ O'yinni bekor qilish"),
+        BotCommand("next",     "📣 Keyingi o'yin haqida"),
+        BotCommand("top",      "🏆 Reyting"),
+        BotCommand("settings", "⚙️ O'yin sozlamalari"),
+        BotCommand("share",    "🔗 Do'stlarni taklif qilish"),
+        BotCommand("help",     "❓ Yordam"),
+    ]
+    private_cmds = [
+        BotCommand("top",     "🏆 Reyting"),
+        BotCommand("profile", "👤 Profilim"),
+        BotCommand("share",   "🔗 Do'stlarni taklif qilish"),
+        BotCommand("help",    "❓ Yordam"),
+    ]
+    await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+    await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
 
 def main():
     token = config.BOT_TOKEN
@@ -1449,13 +1655,20 @@ def main():
 
     app = Application.builder().token(token).post_init(_post_init).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("newgame", cmd_newgame))
-    app.add_handler(CommandHandler("join", cmd_join))
-    app.add_handler(CommandHandler("leave", cmd_leave))
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("game",     cmd_game))
+    app.add_handler(CommandHandler("newgame",  cmd_newgame))
+    app.add_handler(CommandHandler("extend",   cmd_extend))
+    app.add_handler(CommandHandler("stop",     cmd_stop))
+    app.add_handler(CommandHandler("cancel",   cmd_cancel))
+    app.add_handler(CommandHandler("next",     cmd_next))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("share",    cmd_share))
+    app.add_handler(CommandHandler("join",     cmd_join))
+    app.add_handler(CommandHandler("leave",    cmd_leave))
     app.add_handler(CommandHandler("startgame", cmd_startgame))
-    app.add_handler(CommandHandler("endgame", cmd_endgame))
-    app.add_handler(CommandHandler("vote", cmd_vote))
+    app.add_handler(CommandHandler("endgame",  cmd_endgame))
+    app.add_handler(CommandHandler("vote",     cmd_vote))
     app.add_handler(CommandHandler("players", cmd_players))
     app.add_handler(CommandHandler("roles", cmd_roles))
     app.add_handler(CommandHandler("help", cmd_help))
