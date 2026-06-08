@@ -106,6 +106,10 @@ def mention(p: Player) -> str:
     return f'<a href="tg://user?id={p.user_id}">{p.name}</a>'
 
 
+def is_admin(user) -> bool:
+    return (user.username or "").lower() == config.ADMIN_USERNAME.lower()
+
+
 async def cancel_timer(chat_id: int):
     t = timers.pop(chat_id, None)
     if t:
@@ -770,6 +774,9 @@ async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type == "private":
         await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi!")
         return
+    if not is_admin(user):
+        await update.message.reply_text("❌ Faqat admin o'yin yarata oladi.")
+        return
     ex = games.get(chat.id)
     if ex and ex.phase != GamePhase.ENDED:
         await update.message.reply_text("❌ Allaqachon aktiv o'yin bor. /endgame bilan tugatib yangi o'yin boshlang.")
@@ -850,15 +857,13 @@ async def cmd_leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_startgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        await update.message.reply_text("❌ Faqat admin o'yinni boshlay oladi.")
+        return
     game = games.get(chat.id)
     if not game:
         await update.message.reply_text("❌ Hozir o'yin yo'q.")
         return
-    if user.id != game.creator_id:
-        mem = await context.bot.get_chat_member(chat.id, user.id)
-        if mem.status not in ("administrator", "creator"):
-            await update.message.reply_text("❌ Faqat o'yin yaratuvchisi boshlashi mumkin!")
-            return
     if game.phase != GamePhase.LOBBY:
         await update.message.reply_text("❌ O'yin allaqachon boshlangan!")
         return
@@ -870,13 +875,12 @@ async def cmd_startgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_endgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
+    if not is_admin(user):
+        await update.message.reply_text("❌ Faqat admin o'yinni tugatishi mumkin.")
+        return
     game = games.get(chat.id)
     if not game:
         await update.message.reply_text("❌ Aktiv o'yin yo'q.")
-        return
-    mem = await context.bot.get_chat_member(chat.id, user.id)
-    if user.id != game.creator_id and mem.status not in ("administrator", "creator"):
-        await update.message.reply_text("❌ Faqat yaratuvchi yoki admin tugatishi mumkin.")
         return
     await cancel_timer(chat.id)
     await _clear_countdown(context, game)
@@ -1036,8 +1040,8 @@ async def cb_gstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not game:
         await q.answer("O'yin topilmadi!", show_alert=True)
         return
-    if user.id != game.creator_id:
-        await q.answer("Faqat o'yin yaratuvchisi boshlashi mumkin!", show_alert=True)
+    if not is_admin(user):
+        await q.answer("Faqat admin boshlashi mumkin!", show_alert=True)
         return
     if game.phase != GamePhase.LOBBY:
         await q.answer("O'yin allaqachon boshlangan!", show_alert=True)

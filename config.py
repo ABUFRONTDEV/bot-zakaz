@@ -5,6 +5,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Admin: faqat shu username o'yinni boshqara oladi
+ADMIN_USERNAME = "abufdx"
+
 MIN_PLAYERS = 4
 MAX_PLAYERS = 15
 
