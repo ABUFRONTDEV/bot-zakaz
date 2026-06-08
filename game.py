@@ -72,6 +72,9 @@ class Game:
         # Lobby
         self.join_message_id: Optional[int] = None
 
+        # Countdown message (updated every 10s during night/discussion/voting)
+        self.countdown_msg_id: Optional[int] = None
+
     # ── Player helpers ──────────────────────────────────────────
 
     def add_player(self, user_id: int, name: str, username: Optional[str]) -> bool:

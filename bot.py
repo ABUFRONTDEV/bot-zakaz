@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.error import Forbidden, BadRequest
 
 import config
+import stats as player_stats
 from game import Game, GamePhase, Player
 from roles import RoleName, Team, ROLES
 
@@ -108,6 +109,22 @@ async def cancel_timer(chat_id: int):
     t = timers.pop(chat_id, None)
     if t:
         t.cancel()
+
+
+def _fmt_countdown(emoji: str, label: str, remaining: int) -> str:
+    mins, secs = divmod(max(0, remaining), 60)
+    return f"{emoji} <b>{label}</b> — ⏱ {mins:02d}:{secs:02d}"
+
+
+async def _clear_countdown(context: ContextTypes.DEFAULT_TYPE, game: "Game"):
+    if game.countdown_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=game.chat_id, message_id=game.countdown_msg_id
+            )
+        except Exception:
+            pass
+        game.countdown_msg_id = None
 
 
 async def try_dm(context: ContextTypes.DEFAULT_TYPE, user_id: int, **kwargs) -> bool:
@@ -377,7 +394,41 @@ async def start_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 
 
 async def _night_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    await asyncio.sleep(config.NIGHT_TIME)
+    game = games.get(chat_id)
+    if not game:
+        return
+    total = config.NIGHT_TIME
+    remaining = total
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=_fmt_countdown("🌙", "Kecha tugashiga", remaining),
+            parse_mode="HTML",
+        )
+        game.countdown_msg_id = msg.message_id
+    except Exception:
+        pass
+    try:
+        while remaining > 0:
+            step = min(10, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+            game = games.get(chat_id)
+            if not game or game.phase != GamePhase.NIGHT:
+                return  # ended early — end_night already cleared countdown
+            if remaining > 0 and game.countdown_msg_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=game.countdown_msg_id,
+                        text=_fmt_countdown("🌙", "Kecha tugashiga", remaining),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+    except asyncio.CancelledError:
+        return  # cancelled by cancel_timer — end_night will clear countdown
+    timers.pop(chat_id, None)  # remove self before end_night to avoid self-cancel
     game = games.get(chat_id)
     if game and game.phase == GamePhase.NIGHT:
         await end_night(context, chat_id)
@@ -389,6 +440,7 @@ async def end_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         return
     game.phase = GamePhase.DAY_DISCUSSION  # guard before first await — prevents double entry
     await cancel_timer(chat_id)
+    await _clear_countdown(context, game)
 
     checker = game.active_checker()  # save before process_night changes alive state
     res = game.process_night()
@@ -514,7 +566,41 @@ async def start_day(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 
 
 async def _disc_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    await asyncio.sleep(config.DISCUSSION_TIME)
+    game = games.get(chat_id)
+    if not game:
+        return
+    total = config.DISCUSSION_TIME
+    remaining = total
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=_fmt_countdown("🗣", "Muhokama tugashiga", remaining),
+            parse_mode="HTML",
+        )
+        game.countdown_msg_id = msg.message_id
+    except Exception:
+        pass
+    try:
+        while remaining > 0:
+            step = min(15, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+            game = games.get(chat_id)
+            if not game or game.phase != GamePhase.DAY_DISCUSSION:
+                return  # voting started — start_voting already cleared countdown
+            if remaining > 0 and game.countdown_msg_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=game.countdown_msg_id,
+                        text=_fmt_countdown("🗣", "Muhokama tugashiga", remaining),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+    except asyncio.CancelledError:
+        return  # cancelled by cancel_timer — start_voting will clear countdown
+    timers.pop(chat_id, None)
     game = games.get(chat_id)
     if game and game.phase == GamePhase.DAY_DISCUSSION:
         await start_voting(context, chat_id)
@@ -526,6 +612,7 @@ async def start_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         return
     game.phase = GamePhase.DAY_VOTING  # guard before first await — prevents double entry
     await cancel_timer(chat_id)
+    await _clear_countdown(context, game)
     game.reset_votes()
 
     msg = await context.bot.send_message(
@@ -543,7 +630,41 @@ async def start_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 
 
 async def _vote_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    await asyncio.sleep(config.VOTE_TIME)
+    game = games.get(chat_id)
+    if not game:
+        return
+    total = config.VOTE_TIME
+    remaining = total
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=_fmt_countdown("🗳", "Ovoz berish tugashiga", remaining),
+            parse_mode="HTML",
+        )
+        game.countdown_msg_id = msg.message_id
+    except Exception:
+        pass
+    try:
+        while remaining > 0:
+            step = min(10, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+            game = games.get(chat_id)
+            if not game or game.phase != GamePhase.DAY_VOTING:
+                return  # ended early — end_voting already cleared countdown
+            if remaining > 0 and game.countdown_msg_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=game.countdown_msg_id,
+                        text=_fmt_countdown("🗳", "Ovoz berish tugashiga", remaining),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+    except asyncio.CancelledError:
+        return  # cancelled by cancel_timer — end_voting will clear countdown
+    timers.pop(chat_id, None)
     game = games.get(chat_id)
     if game and game.phase == GamePhase.DAY_VOTING:
         await end_voting(context, chat_id)
@@ -555,6 +676,7 @@ async def end_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         return
     game.phase = GamePhase.NIGHT  # guard before first await — prevents double entry
     await cancel_timer(chat_id)
+    await _clear_countdown(context, game)
 
     lynched = game.process_votes()
 
@@ -610,6 +732,9 @@ async def finish_game(context: ContextTypes.DEFAULT_TYPE, chat_id: int, winner: 
     }
     roles_reveal = plist(game, show_roles=True)
 
+    # Record stats before clearing game state
+    player_stats.record_game(list(game.players.values()), winner)
+
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -617,6 +742,7 @@ async def finish_game(context: ContextTypes.DEFAULT_TYPE, chat_id: int, winner: 
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎭 <b>Barcha rollar ochildi:</b>\n{roles_reveal}\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 Statistika: /profile\n"
             f"🎮 Yangi o'yin: /newgame"
         ),
         parse_mode="HTML",
@@ -750,6 +876,7 @@ async def cmd_endgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Faqat yaratuvchi yoki admin tugatishi mumkin.")
         return
     await cancel_timer(chat.id)
+    await _clear_countdown(context, game)
     for uid in list(game.players.keys()):
         user_game.pop(uid, None)
     games.pop(chat.id, None)
@@ -799,8 +926,29 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/vote — Ovoz berishni boshlash\n"
         "/players — O'yinchilar ro'yxati\n"
         "/roles — Barcha rollar haqida\n"
+        "/profile — Mening statistikam\n"
+        "/top — Eng yaxshi o'yinchilar\n"
         "/help — Ushbu yordam",
         parse_mode="HTML",
+    )
+
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    # Allow /profile @username in groups to view others
+    target_user = user
+    if context.args and update.effective_chat.type != "private":
+        # /profile @someone — not implemented yet, show own
+        pass
+    text = player_stats.format_profile(
+        target_user.id, target_user.full_name, target_user.username
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        player_stats.format_top(10), parse_mode="HTML"
     )
 
 
@@ -1281,6 +1429,8 @@ def main():
     app.add_handler(CommandHandler("players", cmd_players))
     app.add_handler(CommandHandler("roles", cmd_roles))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("top", cmd_top))
     app.add_handler(CallbackQueryHandler(callback_router))
     # Mafia group chat — forward DMs to teammates during night
     app.add_handler(MessageHandler(
