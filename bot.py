@@ -76,19 +76,27 @@ def plist(game: Game, show_roles: bool = False) -> str:
         icon = "✅" if p.alive else "💀"
         if show_roles and p.role:
             r = ROLES[p.role]
-            lines.append(f"  {i}. {icon} {mention(p)} — {r.emoji} {r.title}")
+            lines.append(f"{i}. {icon} {mention(p)} — {r.emoji} {r.title}")
         else:
-            lines.append(f"  {i}. {icon} {mention(p)}")
+            lines.append(f"{i}. {icon} {mention(p)}")
     return "\n".join(lines)
+
+
+def alive_list_text(game: Game) -> str:
+    return "\n".join(
+        f"{i}. {mention(p)}"
+        for i, p in enumerate(game.alive_players(), 1)
+    )
 
 
 def lobby_text(game: Game) -> str:
     n = len(game.players)
-    pl = "\n".join(f"  {i}. {mention(p)}" for i, p in enumerate(game.players.values(), 1))
+    pl = "\n".join(f"{i}. {mention(p)}" for i, p in enumerate(game.players.values(), 1))
     return (
-        f"🎮 <b>MAFIA — LOBBY</b>\n\n"
-        f"👥 Ishtirokchilar ({n}/{config.MAX_PLAYERS}):\n{pl}\n\n"
-        f"▸ Kamida {config.MIN_PLAYERS} kishi kerak."
+        f"🎮 <b>Mafia</b> — lobby\n\n"
+        f"👥 O'yinchilar: <b>{n}</b>/{config.MAX_PLAYERS}\n"
+        f"{pl}\n\n"
+        f"<i>Minimum {config.MIN_PLAYERS} kishi kerak</i>"
     )
 
 
@@ -96,7 +104,7 @@ def lobby_kb(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Qo'shilish", callback_data=f"join_{chat_id}"),
          InlineKeyboardButton("❌ Chiqish", callback_data=f"lleave_{chat_id}")],
-        [InlineKeyboardButton("🚀 O'yinni boshlash", callback_data=f"gstart_{chat_id}")],
+        [InlineKeyboardButton("▶️ Boshlash", callback_data=f"gstart_{chat_id}")],
     ])
 
 
@@ -208,16 +216,13 @@ async def send_roles(context: ContextTypes.DEFAULT_TYPE, game: Game):
         win_cond = WIN_CONDITIONS[r.team]
 
         lines = [
-            "┌─────────────────────────┐",
-            f"       🎭 SIZNING ROLINGIZ",
-            "└─────────────────────────┘",
-            "",
-            f"{r.emoji}  <b>{r.title.upper()}</b>",
-            "",
-            f"📋 {r.description}",
-            "",
-            f"🏆 <b>G'alaba sharti:</b>",
-            f"{win_cond}",
+            f"🎭 <b>Sizning rolingiz</b>",
+            f"",
+            f"{r.emoji} <b>{r.title}</b>",
+            f"",
+            f"{r.description}",
+            f"",
+            f"🏆 <i>{win_cond}</i>",
         ]
 
         if r.team == Team.MAFIA:
@@ -225,23 +230,23 @@ async def send_roles(context: ContextTypes.DEFAULT_TYPE, game: Game):
                      if m.team == Team.MAFIA and m.user_id != p.user_id]
             if mates:
                 lines.append("")
-                lines.append("🔴 <b>Jamoangiz:</b>")
+                lines.append("👥 <b>Jamoangiz:</b>")
                 for m in mates:
                     lines.append(f"  {ROLES[m.role].emoji} {m.name} — {ROLES[m.role].title}")
             lines.append("")
-            lines.append("💬 <b>Mafia chati:</b> Kecha davomida menga istalgan xabar yozing — jamoadoshlaringizga yetkazaman.")
+            lines.append("💬 Kecha davomida menga xabar yozing — jamoadoshlaringizga yetkazaman.")
 
         text = "\n".join(lines)
         if not await try_dm(context, p.user_id, text=text, parse_mode="HTML"):
             no_dm.append(p.name)
 
     if no_dm:
+        names = ", ".join(f"<b>{n}</b>" for n in no_dm)
         await context.bot.send_message(
             chat_id=game.chat_id,
             text=(
-                "⚠️ Quyidagilar botga <b>/start</b> yubormagan, roli yetib bormadi:\n"
-                + "\n".join(f"• {n}" for n in no_dm)
-                + "\n\nBotga /start yuboring va /join bosing."
+                f"⚠️ {names} — botga /start yubormagan, roli yetmadi.\n"
+                f"Botga /start yuboring!"
             ),
             parse_mode="HTML",
         )
@@ -297,13 +302,12 @@ async def start_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     game.round += 1
     game.reset_night()
 
-    alive_list = "\n".join(f"  {i}. {mention(p)}" for i, p in enumerate(game.alive_players(), 1))
+    al = alive_list_text(game)
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            f"🌙 <b>KECHA — {game.round}</b>\n\n"
-            f"Shahar uxladi...\n\n"
-            f"👥 Tirik ({len(game.alive_players())}):\n{alive_list}\n\n"
+            f"🌙 <b>{game.round}-kecha</b>\n\n"
+            f"👥 Tirik ({len(game.alive_players())}):\n{al}\n\n"
             f"📱 Shaxsiy xabarlaringizni tekshiring!"
         ),
         parse_mode="HTML",
@@ -319,7 +323,7 @@ async def start_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
             role = ROLES[p.role]
             await try_dm(
                 context, p.user_id,
-                text=f"🌙 <b>Kecha {game.round}</b>\n\n{role.emoji} <b>{role.title}</b> sifatida uxlaysiz...",
+                text=f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.title} — bu kecha harakatingiz yo'q.",
                 parse_mode="HTML",
             )
             game.night_done.add(p.user_id)
@@ -330,60 +334,53 @@ async def start_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         # ── MAFIA ──
         if p.role == RoleName.DON or (p == killer and p.role in (RoleName.MASHUQA, RoleName.ADVOKAT)):
             mates = [m for m in game.mafia_players() if m.user_id != p.user_id]
-            mates_text = "\n".join(f"  {ROLES[m.role].emoji} {m.name}" for m in mates) if mates else "  (Siz yolg'iz mafia a'zosisiz)"
+            mates_text = "\n".join(f"  {ROLES[m.role].emoji} {m.name}" for m in mates) if mates else "  (Siz yolg'iz)"
             mafia_ids = {m.user_id for m in game.mafia_players()}
             kb = players_kb(game, "nkill", exclude_set=mafia_ids)
             text = (
-                f"🌙 <b>Kecha {game.round}</b>\n\n"
-                f"🔴 <b>Mafia sessiyasi</b>\n\n"
-                f"👥 <b>Jamoangiz:</b>\n{mates_text}\n\n"
-                f"💬 Jamoadoshlar bilan muloqot: menga shunchaki xabar yozing.\n\n"
-                f"🎯 <b>Qurbon tanlang:</b>"
+                f"🌙 <b>{game.round}-kecha</b> — 🔴 Mafia\n\n"
+                f"👥 Jamoangiz:\n{mates_text}\n\n"
+                f"🎯 Qurbonni tanlang:"
             )
 
         elif p.role == RoleName.MASHUQA:
             kb = players_kb(game, "nmash", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
         elif p.role == RoleName.ADVOKAT:
             kb = players_kb(game, "nadv", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
-        # ── CHECKER ──
         elif p.role == RoleName.KOMISSAR:
             kb = players_kb(game, "nkomir", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
         elif p.role == RoleName.SERJANT:
-            # Only reaches here if Komissar is dead (player_has_night_action ensures this)
             kb = players_kb(game, "nserj", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n🎖️ Komissar o'ldi — siz tekshirasiz!\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n🎖️ Komissar o'ldi, siz tekshirasiz.\n{role.action_prompt}"
 
-        # ── HEALER ──
         elif p.role == RoleName.DOKTOR:
             kb = players_kb(game, "ndokt")
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
         elif p.role == RoleName.HAMSHIRA:
-            # Only reaches here if Doktor is dead
             kb = players_kb(game, "nhamsh")
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n🏥 Doktor o'ldi — siz davolaysiz!\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n🏥 Doktor o'ldi, siz davolaysiz.\n{role.action_prompt}"
 
-        # ── OTHERS ──
         elif p.role == RoleName.DAYDI:
             kb = players_kb(game, "ndaydi", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
         elif p.role == RoleName.QOTIL:
             kb = players_kb(game, "nqotil", exclude=p.user_id)
-            text = f"🌙 <b>Kecha {game.round}</b>\n\n{role.action_prompt}"
+            text = f"🌙 <b>{game.round}-kecha</b>\n\n{role.emoji} {role.action_prompt}"
 
         elif p.role == RoleName.XAKER and xaker_active:
             kb = players_kb(game, "xswap1", exclude=p.user_id, skip_cb="xswap_skip")
             text = (
-                f"🌙 <b>Kecha {game.round}</b>\n\n"
+                f"🌙 <b>{game.round}-kecha</b>\n\n"
                 f"💻 {role.action_prompt}\n"
-                f"(Qolgan imkoniyat: {3 - (game.round - 1)} kecha)"
+                f"<i>Qolgan: {3 - (game.round - 1)} kecha</i>"
             )
 
         else:
@@ -479,31 +476,31 @@ async def end_night(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     all_dead = dead + extra_dead
 
     # Build morning announcement
-    parts = [f"☀️ <b>{game.round}-KUN BOSHLANDI</b>\n"]
+    parts = [f"☀️ <b>{game.round}-kun</b>\n"]
 
     if not all_dead:
         if res["saved"]:
-            parts.append("🍀 <b>Mo'jiza!</b> Kecha hech kim o'lmadi — kimdir qutqarildi!")
+            parts.append("🍀 Kecha hech kim o'lmadi — kimdir qutqarildi!")
         else:
-            parts.append("😴 Tinch kecha o'tdi. Hech kim o'lmadi.")
+            parts.append("😴 Tinch kecha. Hech kim o'lmadi.")
     else:
-        parts.append("💀 <b>Kecha qurbonlar:</b>")
+        parts.append("💀 Kecha halok bo'ldi:")
         for v in dead:
             r = ROLES[v.role]
-            parts.append(f"  • {mention(v)} — {r.emoji} <b>{r.title}</b> edi.")
+            parts.append(f"  • {mention(v)} — {r.emoji} {r.title}")
         for v in extra_dead:
             r = ROLES[v.role]
-            parts.append(f"  💣 {mention(v)} (Kamikadze) ham olib ketildi — {r.emoji} <b>{r.title}</b> edi.")
+            parts.append(f"  💣 {mention(v)} (Kamikadze) — {r.emoji} {r.title}")
 
     if res["xaker_swapped"]:
-        parts.append("\n💻 <b>Xaker</b> tunda ikki o'yinchining rollarini almashtirib qo'ydi!")
+        parts.append("\n💻 Xaker tunda ikki o'yinchining rolini almashtirib qo'ydi!")
 
     if res["daydi_location"]:
         loc = res["daydi_location"]
-        parts.append(f"\n🚶 <b>Daydi</b> kecha {mention(loc)}ning uyida tunagan edi.")
+        parts.append(f"\n🚶 Daydi kecha {mention(loc)}ning uyida tunagan.")
 
-    alive_list = "\n".join(f"  {i}. {mention(p)}" for i, p in enumerate(game.alive_players(), 1))
-    parts.append(f"\n👥 Tirik ({len(game.alive_players())}):\n{alive_list}")
+    al = alive_list_text(game)
+    parts.append(f"\n👥 Tirik ({len(game.alive_players())}):\n{al}")
 
     await context.bot.send_message(chat_id=chat_id, text="\n".join(parts), parse_mode="HTML")
 
@@ -536,15 +533,13 @@ async def start_day(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     game.phase = GamePhase.DAY_DISCUSSION
     game.reset_votes()
 
-    pl = "\n".join(f"  {i}. {mention(p)}" for i, p in enumerate(game.alive_players(), 1))
-
+    al = alive_list_text(game)
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            f"🗣 <b>MUHOKAMA</b>\n\n"
-            f"Kim mafiya? Kim begunoh?\n\n"
-            f"👥 Tirik ({len(game.alive_players())}):\n{pl}\n\n"
-            f"⏱ {config.DISCUSSION_TIME} soniya  •  /vote — erta boshlash"
+            f"🗣 <b>Muhokama</b>\n\n"
+            f"👥 Tirik ({len(game.alive_players())}):\n{al}\n\n"
+            f"⏱ {config.DISCUSSION_TIME} soniya — /vote erta boshlash"
         ),
         parse_mode="HTML",
     )
@@ -620,11 +615,7 @@ async def start_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 
     msg = await context.bot.send_message(
         chat_id=chat_id,
-        text=(
-            f"🗳 <b>OVOZ BERISH</b>\n\n"
-            f"Kimni shahardan haydash kerak?\n"
-            f"⏱ {config.VOTE_TIME} soniya"
-        ),
+        text=f"🗳 <b>Ovoz berish</b> — {config.VOTE_TIME} soniya\n\nKimni shahardan haydash kerak?",
         reply_markup=vote_kb(game),
         parse_mode="HTML",
     )
@@ -686,7 +677,7 @@ async def end_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     if not lynched:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="⚖️ <b>Ovozlar teng keldi!</b>\n\nShahar qaror qabul qila olmadi. Hech kim haydalmaidi.\n\n🌙 Kecha boshlanadi...",
+            text="⚖️ Ovozlar teng keldi. Hech kim haydalmaidi.\n\n🌙 Kecha boshlanadi...",
             parse_mode="HTML",
         )
     else:
@@ -695,9 +686,8 @@ async def end_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
-                f"⚖️ <b>SHAHAR QARORI</b>\n\n"
-                f"<b>{lynched.name}</b> shahardan haydaldi! ({vote_count} ovoz)\n\n"
-                f"Uning roli: {r.emoji} <b>{r.title}</b>"
+                f"⚖️ {mention(lynched)} shahardan haydaldi ({vote_count} ovoz)\n"
+                f"Roli: {r.emoji} <b>{r.title}</b>"
             ),
             parse_mode="HTML",
         )
@@ -707,7 +697,10 @@ async def end_voting(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
                 rr = ROLES[rev.role]
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"💣 <b>KAMIKADZE!</b>\n{lynched.name} o'lim arafasida <b>{rev.name}</b>ni ham olib ketdi!\nUning roli: {rr.emoji} <b>{rr.title}</b>",
+                    text=(
+                        f"💣 Kamikadze! {mention(lynched)} o'lim arafasida "
+                        f"{mention(rev)}ni ham olib ketdi — {rr.emoji} {rr.title}"
+                    ),
                     parse_mode="HTML",
                 )
 
@@ -729,24 +722,20 @@ async def finish_game(context: ContextTypes.DEFAULT_TYPE, chat_id: int, winner: 
     await cancel_timer(chat_id)
 
     banners = {
-        "civil": "🎉 <b>TINCH AHOLI G'ALABA QILDI!</b>\n\n✅ Barcha mafia a'zolari yo'q qilindi!",
-        "mafia": "🔴 <b>MAFIA G'ALABA QILDI!</b>\n\n💀 Shahar mafia qo'liga o'tdi!",
-        "qotil": "🗡️ <b>QOTIL G'ALABA QILDI!</b>\n\n☠️ Yolg'iz qotil hamma ustidan zafar qozondi!",
+        "civil": "🎉 <b>Tinch aholi g'alaba qildi!</b>",
+        "mafia": "🔴 <b>Mafia g'alaba qildi!</b>",
+        "qotil": "🗡️ <b>Qotil g'alaba qildi!</b>",
     }
     roles_reveal = plist(game, show_roles=True)
 
-    # Record stats before clearing game state
     player_stats.record_game(list(game.players.values()), winner)
 
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
             f"{banners[winner]}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🎭 <b>Barcha rollar ochildi:</b>\n{roles_reveal}\n"
-            f"━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📊 Statistika: /profile\n"
-            f"🎮 Yangi o'yin: /newgame"
+            f"🎭 Rollar:\n{roles_reveal}\n\n"
+            f"📊 /profile  •  🎮 /newgame"
         ),
         parse_mode="HTML",
     )
@@ -969,12 +958,9 @@ async def _launch_game(context: ContextTypes.DEFAULT_TYPE, game: Game):
     await context.bot.send_message(
         chat_id=game.chat_id,
         text=(
-            f"🎮 <b>O'YIN BOSHLANDI!</b>\n\n"
-            f"👥 O'yinchilar: <b>{len(game.players)}</b>\n"
-            f"🎭 Rollar taqsimlandi!\n\n"
-            f"Shaxsiy xabarlaringizni tekshiring. "
-            f"Agar xabar kelmagan bo'lsa, botga /start yuboring.\n\n"
-            f"5 soniyadan keyin kecha boshlanadi..."
+            f"🎮 <b>O'yin boshlandi!</b> {len(game.players)} o'yinchi\n\n"
+            f"🎭 Rollar taqsimlandi — shaxsiy xabarni tekshiring.\n"
+            f"<i>Agar xabar kelmasa, botga /start yuboring.</i>"
         ),
         parse_mode="HTML",
     )
