@@ -1153,7 +1153,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stop — Ro'yxatni to'xtatish\n"
         "/cancel — O'yinni bekor qilish\n"
         "/next — Keyingi o'yin haqida\n"
-        "/settings — Sozlamalar\n\n"
+        "/settings — Sozlamalar\n"
+        "/abukotmi — Abu kotmi?\n\n"
         "<b>Hammaga:</b>\n"
         "/top — Reyting\n"
         "/profile — Statistikam\n"
@@ -1181,6 +1182,13 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         player_stats.format_top(10), parse_mode="HTML"
     )
+
+
+async def cmd_abukotmi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user):
+        return
+    await update.message.reply_text("xa abu kot")
 
 
 # ─────────────────────── LAUNCH ─────────────────────────────────
@@ -1681,6 +1689,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("settings", "⚙️ O'yin sozlamalari"),
         BotCommand("share",    "🔗 Do'stlarni taklif qilish"),
         BotCommand("help",     "❓ Yordam"),
+        BotCommand("abukotmi",  "🤔 Abu kotmi?"),
     ]
     private_cmds = [
         BotCommand("start",    "🤖 Botni boshlash"),
@@ -1722,6 +1731,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("top", cmd_top))
+    app.add_handler(CommandHandler("abukotmi", cmd_abukotmi))
     app.add_handler(CallbackQueryHandler(callback_router))
     # Mafia group chat — forward DMs to teammates during night
     app.add_handler(MessageHandler(
